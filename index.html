@@ -1,0 +1,312 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<meta name="theme-color" content="#17131f">
+ <meta name="description" content="Rata Quesera: aventura retro de plataformas, espadas, queso y jefes.">
+ <link rel="manifest" href="./manifest.webmanifest">
+ <link rel="icon" href="./icons/icon.svg" type="image/svg+xml">
+<title>Rata Quesera</title>
+<style>
+*{box-sizing:border-box}
+html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#111;touch-action:none;user-select:none;-webkit-user-select:none;font-family:system-ui,sans-serif}
+canvas{display:block;position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);background:#87ceeb;image-rendering:pixelated}
+.tb{position:fixed;bottom:max(14px,env(safe-area-inset-bottom));width:66px;height:66px;border-radius:50%;border:2px solid #fff;background:#0009;color:#fff;font-size:28px;z-index:3;touch-action:none}
+#left{left:12px}#right{left:88px}#jump{right:88px}#attack{right:12px}
+#ov{position:fixed;inset:0;background:#000c;display:none;flex-direction:column;align-items:center;justify-content:center;gap:9px;color:#fff;z-index:5;text-align:center;padding:16px;overflow:auto}
+#ov h2{margin:0;font-size:30px}
+#ov p{margin:5px 0}
+#ov button{font-size:16px;padding:11px 18px;border-radius:10px;border:0;background:#ffd23f;color:#222;min-width:min(280px,85vw);font-weight:700}
+#ov button:disabled{background:#6a6;color:#fff}
+#ov button.lock{background:#666;color:#ccc}
+.small{font-size:12px;opacity:.85}
+@media (pointer:fine){.tb{opacity:.72}}
+</style>
+</head>
+<body>
+<canvas id="c" width="800" height="450"></canvas>
+<button class="tb" id="left" data-k="tl" aria-label="Mover a la izquierda">◀</button>
+<button class="tb" id="right" data-k="tr" aria-label="Mover a la derecha">▶</button>
+<button class="tb" id="jump" data-k="tj" aria-label="Saltar">⤒</button>
+<button class="tb" id="attack" data-k="ta" aria-label="Atacar">⚔</button>
+<div id="ov"></div>
+<script>
+'use strict';
+const cv=document.getElementById('c'),g=cv.getContext('2d'),ov=document.getElementById('ov');
+const W=800,H=450,GY=380;
+const SW=[
+ {n:'🪵 Espada de madera',dmg:1,rng:36,cost:0,col:'#a0713b'},
+ {n:'⚔️ Espada de hierro',dmg:3,rng:44,cost:40,col:'#cfd3d6'},
+ {n:'💎 Espada de diamante',dmg:7,rng:52,cost:150,col:'#4ff0ff'},
+ {n:'🔴 Sable láser',dmg:16,rng:74,cost:500,col:'#ff3030'}
+];
+
+function resizeCanvas(){
+ const ratio=16/9, vw=innerWidth, vh=innerHeight;
+ let w=Math.min(vw,vh*ratio),h=w/ratio;
+ if(h>vh){h=vh;w=h*ratio}
+ const dpr=Math.min(devicePixelRatio||1,2);
+ cv.style.width=w+'px';cv.style.height=h+'px';
+ cv.width=Math.round(W*dpr);cv.height=Math.round(H*dpr);
+ g.setTransform(dpr,0,0,dpr,0,0);
+}
+addEventListener('resize',resizeCanvas);resizeCanvas();
+
+const defaults=()=>({level:1,cheese:0,owned:[1,0,0,0],sword:0});
+let S=defaults();
+try{
+ const saved=JSON.parse(localStorage.getItem('rata_quesera_v2')||'null');
+ if(saved&&typeof saved==='object'){
+  S.level=Math.max(1,Math.min(100,Number(saved.level)||1));
+  S.cheese=Math.max(0,Number(saved.cheese)||0);
+  S.owned=Array.isArray(saved.owned)&&saved.owned.length===4?saved.owned.map(Boolean):[true,false,false,false];
+  S.owned[0]=true;
+  S.sword=Math.max(0,Math.min(3,Number(saved.sword)||0));
+  if(!S.owned[S.sword])S.sword=0;
+ }
+}catch(e){S=defaults()}
+function save(){try{localStorage.setItem('rata_quesera_v2',JSON.stringify(S))}catch(e){}}
+
+const keys=Object.create(null);
+addEventListener('keydown',e=>{
+ keys[e.code]=true;
+ if(['Space','ArrowUp','ArrowDown','ArrowLeft','ArrowRight'].includes(e.code))e.preventDefault();
+});
+addEventListener('keyup',e=>keys[e.code]=false);
+addEventListener('blur',()=>{for(const k in keys)keys[k]=false});
+document.querySelectorAll('.tb').forEach(b=>{
+ const k=b.dataset.k;
+ const release=()=>{keys[k]=false};
+ b.addEventListener('pointerdown',e=>{
+  e.preventDefault();keys[k]=true;
+  try{b.setPointerCapture(e.pointerId)}catch(_){}
+ });
+ b.addEventListener('pointerup',release);
+ b.addEventListener('pointercancel',release);
+ b.addEventListener('lostpointercapture',release);
+ b.addEventListener('contextmenu',e=>e.preventDefault());
+});
+const L=()=>!!(keys.ArrowLeft||keys.KeyA||keys.tl);
+const R=()=>!!(keys.ArrowRight||keys.KeyD||keys.tr);
+const J=()=>!!(keys.Space||keys.ArrowUp||keys.KeyW||keys.tj);
+const A=()=>!!(keys.KeyX||keys.KeyJ||keys.Enter||keys.ta);
+
+function rngf(s){return()=>{s|=0;s=s+0x6D2B79F5|0;let t=Math.imul(s^s>>>15,1|s);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296}}
+let P=[],E=[],C=[],T=[],exit=null,worldW=800,pl=null,mode='ui',startCheese=0,shopNext=false,cx=0,jumpWasDown=false;
+
+function build(lv){
+ const r=rngf(lv*7919+13);P=[];E=[];C=[];T=[];exit=null;
+ if(lv%10===0){
+  worldW=1000;
+  P.push({x:0,y:GY,w:1000,h:70},{x:180,y:290,w:120,h:14},{x:700,y:290,w:120,h:14});
+  C.push({x:240,y:262},{x:760,y:262});
+  const hp=20+lv*3;
+  E.push({boss:1,x:720,y:GY-100,w:100,h:100,hp,hm:hp,vy:0,dir:-1,sw:-1,kb:0,t:0});
+  exit={x:930,y:GY-60,w:50,h:60,on:false};
+ }else{
+  const len=1500+Math.min(lv,60)*45;let x=350;
+  P.push({x:0,y:GY,w:350,h:70});
+  while(x<len){
+   const gapMax=70+Math.min(60,lv*.8),gap=50+r()*(gapMax-50),gx=x;
+   x+=gap;
+   for(let i=1;i<=3;i++)C.push({x:gx+gap*i/4,y:GY-70-Math.sin(i/4*Math.PI)*40});
+   if(gap>95){P.push({x:gx+gap/2-30,y:GY-70,w:60,h:12});C.push({x:gx+gap/2,y:GY-100})}
+   const w=160+r()*220;
+   P.push({x,y:GY,w,h:70});
+   if(w>200&&r()<.35+Math.min(.4,lv*.01)){
+    const hp=2+Math.floor(lv*.6),ex=x+w/2;
+    E.push({x:ex,y:GY-30,w:30,h:30,hp,hm:hp,a:x+10,b:x+w-40,dir:1,sw:-1,kb:0});
+   }
+   if(r()<.4){const py=GY-100-r()*40;P.push({x:x+w*.3,y:py,w:80,h:12});C.push({x:x+w*.3+40,y:py-24})}
+   if(r()<.5)C.push({x:x+w/2,y:GY-26});
+   x+=w;
+  }
+  worldW=x;exit={x:x-70,y:GY-60,w:50,h:60,on:true};
+ }
+}
+
+function show(h){ov.innerHTML=h;ov.style.display='flex';mode='ui'}
+function hide(){ov.style.display='none'}
+function menu(){
+ pl=null;
+ show(`<h2>🐀 Rata Quesera 🧀</h2>
+ <p>🧀 ${S.cheese} &nbsp;·&nbsp; ${SW[S.sword].n}</p>
+ <button onclick="start()">▶ Jugar · Nivel ${S.level}/100</button>
+ <button onclick="shopNext=false;shop()">🏪 Tienda de espadas</button>
+ <button onclick="if(confirm('¿Borrar todo el progreso?')){S=defaults();save();menu()}">🗑 Reiniciar progreso</button>
+ <p class="small">PC: A/D o flechas · Espacio para saltar · X para atacar<br>Celular: botones en pantalla</p>`);
+}
+function shop(msg){
+ let h=`<h2>${msg||'🏪 Tienda de espadas'}</h2><p>🧀 ${S.cheese}</p>`;
+ SW.forEach((w,i)=>{
+  const own=S.owned[i],locked=i>0&&!S.owned[i-1]&&!own;
+  const lbl=S.sword===i?'EQUIPADA':own?'Equipar':locked?'🔒 Compra la anterior':'🧀 '+w.cost;
+  h+=`<button ${S.sword===i?'disabled':''} ${locked?'class="lock"':''} onclick="buy(${i})">${w.n} · daño ${w.dmg}<br>${lbl}</button>`;
+ });
+ h+=shopNext?`<button onclick="start()" style="background:#7be37b">▶ Siguiente nivel (${S.level})</button>`:`<button onclick="menu()">⬅ Volver</button>`;
+ show(h);
+}
+function buy(i){
+ if(!S.owned[i]){
+  if(i>0&&!S.owned[i-1])return;
+  if(S.cheese<SW[i].cost)return;
+  S.cheese-=SW[i].cost;S.owned[i]=true;
+ }
+ S.sword=i;save();shop();
+}
+function start(){
+ hide();build(S.level);
+ pl={x:40,y:GY-30,w:30,h:22,vx:0,vy:0,on:false,coy:0,f:1,hp:5,inv:0,kb:0,at:0,sw:0};
+ startCheese=S.cheese;mode='play';jumpWasDown=J();
+ if(S.level%10===0)T.push({x:300,y:150,s:'¡JEFE!',t:120,abs:1});
+}
+function die(){
+ S.cheese=startCheese;save();T=[];start();
+ T.push({x:300,y:150,s:'¡Inténtalo otra vez!',t:90,abs:1});
+}
+function complete(){
+ if(S.level>=100){win();return}
+ S.level++;save();shopNext=true;shop('🎉 ¡Nivel superado!');
+}
+function win(){
+ mode='ui';S.level=1;save();
+ show(`<div style="font-size:100px">🧀</div><h2>¡CONSEGUISTE EL QUESO GIGANTE!</h2>
+ <p>Completaste los 100 niveles. ¡Eres el rey de las ratas!</p>
+ <button onclick="menu()">Volver al menú</button>`);
+}
+const hit=(a,b)=>a.x<b.x+b.w&&a.x+a.w>b.x&&a.y<b.y+b.h&&a.y+a.h>b.y;
+
+function update(){
+ if(mode!=='play'||!pl)return;
+ const p=pl,lv=S.level,sw=SW[S.sword];
+ const dir=(R()?1:0)-(L()?1:0);
+ p.vx=dir*4;if(dir)p.f=dir;
+ p.coy=p.on?7:Math.max(0,p.coy-1);
+ const jumpNow=J();
+ if(jumpNow&&!jumpWasDown&&p.coy>0){p.vy=-13;p.coy=0;p.on=false}
+ if(!jumpNow&&p.vy<-5)p.vy=-5;
+ jumpWasDown=jumpNow;
+ if(A()&&p.at<=0){p.at=14;p.sw++}
+ if(p.at>0)p.at--;
+ p.vy=Math.min(16,p.vy+.6);
+ p.x+=p.vx+p.kb;p.kb*=.82;
+ const oldBottom=p.y+p.h;
+ p.y+=p.vy;
+ p.x=Math.max(0,Math.min(worldW-p.w,p.x));
+ p.on=false;
+ for(const platform of P){
+  if(p.vy>=0&&p.x+p.w>platform.x&&p.x<platform.x+platform.w&&oldBottom<=platform.y+2&&p.y+p.h>=platform.y){
+   p.y=platform.y-p.h;p.vy=0;p.on=true;
+  }
+ }
+ if(p.inv>0)p.inv--;
+ if(p.y>H+80||p.hp<=0){die();return}
+ let box=null;
+ if(p.at>0)box={x:p.f>0?p.x+p.w:p.x-sw.rng,y:p.y-14,w:sw.rng,h:p.h+28};
+ for(let i=E.length-1;i>=0;i--){
+  const e=E[i];
+  if(e.boss){
+   e.t++;
+   const d=(p.x+p.w/2)<(e.x+e.w/2)?-1:1;e.dir=d;
+   e.x+=d*(1.2+lv*.01)+e.kb;e.kb*=.8;
+   e.vy=Math.min(14,e.vy+.6);e.y+=e.vy;
+   if(e.y+e.h>=GY){e.y=GY-e.h;e.vy=0;if(e.t%100===0)e.vy=-12}
+   e.x=Math.max(0,Math.min(worldW-e.w,e.x));
+  }else{
+   e.x+=e.dir*(.8+lv*.005)+e.kb;e.kb*=.8;
+   if(e.x<e.a)e.dir=1;if(e.x>e.b)e.dir=-1;
+  }
+  if(box&&e.sw!==p.sw&&hit(box,e)){
+   e.sw=p.sw;e.hp-=sw.dmg;e.kb=p.f*(e.boss?3:6);
+   T.push({x:e.x+e.w/2,y:e.y,s:'-'+sw.dmg,t:30});
+   if(e.hp<=0){
+    const rew=e.boss?30+lv*2:3+Math.floor(lv/5);
+    S.cheese+=rew;save();T.push({x:e.x+e.w/2,y:e.y-20,s:'+'+rew+'🧀',t:50});
+    E.splice(i,1);if(e.boss)exit.on=true;continue;
+   }
+  }
+  if(p.inv<=0&&hit(p,e)){p.hp--;p.inv=60;p.kb=(p.x<e.x?-1:1)*8;p.vy=-6}
+ }
+ const val=1+Math.floor(lv/10);
+ for(let i=C.length-1;i>=0;i--){
+  const c=C[i];
+  if(Math.abs(c.x-(p.x+p.w/2))<24&&Math.abs(c.y-(p.y+p.h/2))<26){
+   S.cheese+=val;C.splice(i,1);T.push({x:c.x,y:c.y,s:'+'+val,t:25});save();
+  }
+ }
+ if(exit&&exit.on&&hit(p,exit)){save();complete();return}
+ const target=Math.max(0,Math.min(worldW-W,p.x-300));
+ cx+=(target-cx)*.12;
+ T.forEach(t=>{t.t--;if(!t.abs)t.y-=.6});T=T.filter(t=>t.t>0);
+}
+
+function drawRat(p){
+ if(p.inv>0&&((p.inv>>2)&1))return;
+ const sw=SW[S.sword];
+ g.save();g.translate(p.x-cx+p.w/2,p.y+p.h/2);g.scale(p.f,1);
+ g.strokeStyle='#e8a0a8';g.lineWidth=3;g.beginPath();g.moveTo(-14,4);g.quadraticCurveTo(-24,12,-30,0);g.stroke();
+ g.fillStyle='#8a8a92';g.beginPath();g.ellipse(0,2,15,10,0,0,Math.PI*2);g.fill();
+ g.beginPath();g.ellipse(12,0,8,6,0,0,Math.PI*2);g.fill();
+ g.fillStyle='#e8a0a8';g.beginPath();g.arc(8,-7,4,0,Math.PI*2);g.fill();
+ g.beginPath();g.arc(20,0,2,0,Math.PI*2);g.fill();
+ g.fillStyle='#000';g.beginPath();g.arc(14,-2,1.6,0,Math.PI*2);g.fill();
+ const step=p.on&&p.vx?Math.sin(Date.now()/60)*4:0;
+ g.fillStyle='#6d6d74';g.fillRect(-8+step,10,6,4);g.fillRect(4-step,10,6,4);
+ g.save();g.translate(10,4);g.rotate(p.at>0?-1.4+(14-p.at)/14*2.4:-.9);
+ g.fillStyle='#5a3a1a';g.fillRect(-3,-2,8,4);g.fillStyle=sw.col;
+ if(S.sword===3){g.shadowColor='#f00';g.shadowBlur=12}
+ g.fillRect(5,-2,sw.rng-8,S.sword===3?4:5);
+ g.restore();g.restore();
+}
+function draw(){
+ g.fillStyle='#87ceeb';g.fillRect(0,0,W,H);
+ g.fillStyle='#ffffffaa';
+ for(let i=0;i<6;i++){
+  const x=((i*260-cx*.3)%1300+1300)%1300-200;
+  g.beginPath();g.ellipse(x,70+(i%3)*40,50,18,0,0,Math.PI*2);g.fill();
+ }
+ if(!pl)return;
+ for(const p of P){
+  g.fillStyle='#7a4e2b';g.fillRect(p.x-cx,p.y,p.w,p.h);
+  g.fillStyle='#4caf50';g.fillRect(p.x-cx,p.y,p.w,8);
+ }
+ g.textAlign='center';g.textBaseline='bottom';g.font='22px sans-serif';
+ for(const c of C)g.fillText('🧀',c.x-cx,c.y+11);
+ if(exit&&exit.on){
+  if(S.level===100){g.font='80px sans-serif';g.fillText('🧀',exit.x-cx+25,exit.y+70)}
+  else{g.font='50px sans-serif';g.fillText('🚪',exit.x-cx+25,exit.y+60)}
+ }
+ for(const e of E){
+  g.font=(e.boss?100:32)+'px sans-serif';
+  g.fillText('🍋',e.x-cx+e.w/2,e.y+e.h+(e.boss?8:3));
+  if(e.boss){g.font='34px sans-serif';g.fillText('👑',e.x-cx+e.w/2,e.y+6)}
+  const bw=e.boss?100:30;
+  g.fillStyle='#000a';g.fillRect(e.x-cx+e.w/2-bw/2,e.y-(e.boss?42:10),bw,5);
+  g.fillStyle='#e33';g.fillRect(e.x-cx+e.w/2-bw/2,e.y-(e.boss?42:10),bw*Math.max(0,e.hp/e.hm),5);
+ }
+ drawRat(pl);
+ g.font='bold 20px sans-serif';
+ for(const t of T){
+  g.fillStyle='#fff';g.strokeStyle='#000';g.lineWidth=3;
+  const x=t.abs?t.x:t.x-cx;g.strokeText(t.s,x,t.y);g.fillText(t.s,x,t.y);
+ }
+ g.textAlign='left';g.textBaseline='top';g.font='bold 18px sans-serif';
+ g.fillStyle='#000a';g.fillRect(6,6,350,30);g.fillStyle='#fff';
+ g.fillText(`Nivel ${S.level}/100  🧀${S.cheese}  ❤${'♥'.repeat(Math.max(0,pl.hp))}`,12,11);
+ g.textAlign='right';g.fillStyle='#000a';g.fillRect(W-216,6,210,30);
+ g.fillStyle='#fff';g.font='bold 14px sans-serif';g.fillText(SW[S.sword].n,W-12,14);
+}
+let last=0,acc=0;
+function loop(t){
+ acc+=Math.min(100,t-last);last=t;
+ while(acc>=16.67){update();acc-=16.67}
+ draw();requestAnimationFrame(loop);
+}
+if('serviceWorker' in navigator){
+ navigator.serviceWorker.register('./sw.js').catch(err=>console.warn('SW:',err));
+}
+menu();requestAnimationFrame(loop);
+</script>
+</body>
+</html>

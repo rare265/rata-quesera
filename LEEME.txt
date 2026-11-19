@@ -1,0 +1,38 @@
+RATA QUESERA — PAQUETE PWA
+
+CONTENIDO
+- index.html: juego
+- manifest.webmanifest: identidad y modo instalable
+- sw.js: caché offline básica
+- icons/icon.svg, icon-192.png e icon-512.png: iconos retro
+
+PRUEBA LOCAL
+No abras index.html como archivo para validar la instalación PWA. El manifest y el service worker requieren HTTPS o localhost.
+Puedes abrir index.html en Chrome para probar la jugabilidad, pero la instalación PWA se prueba después de publicar el sitio por HTTPS.
+
+PUBLICAR CON GITHUB PAGES (desde el celular)
+1. Crea/inicia sesión en https://github.com
+2. Crea un repositorio público llamado rata-quesera.
+3. Sube TODOS los archivos y carpetas de este ZIP, conservando la estructura.
+4. En el repositorio: Settings > Pages.
+5. En Build and deployment selecciona Deploy from a branch.
+6. Selecciona main y /(root), guarda.
+7. Espera a que GitHub Pages publique la URL https://TU-USUARIO.github.io/rata-quesera/
+8. Abre esa URL en Chrome Android. Menú ⋮ > Instalar aplicación o Añadir a pantalla principal.
+
+EMPAQUETAR PARA GOOGLE PLAY
+1. Abre https://www.pwabuilder.com desde Chrome.
+2. Pega la URL HTTPS publicada.
+3. Espera el análisis y corrige cualquier advertencia crítica.
+4. Package for stores > Android > Generate Package.
+5. Selecciona Google Play y configura nombre/ID del paquete.
+6. Descarga el ZIP del paquete y sigue las instrucciones de PWABuilder para publicar assetlinks.json en:
+   https://TU-USUARIO.github.io/.well-known/assetlinks.json
+   (si usas un dominio/proyecto con ruta, sigue la ruta exacta que PWABuilder indique).
+7. Verifica el archivo AAB y su target API antes de subirlo a Play Console.
+
+NOTAS
+- El archivo HTML original usa emojis para representar personajes y objetos; todavía no es arte pixel-art retro terminado.
+- El service worker cachea el juego para uso sin conexión después de la primera carga exitosa.
+- No cambies el ID del paquete después de publicar.
+- Guarda la clave de firma y sus contraseñas de forma segura.
